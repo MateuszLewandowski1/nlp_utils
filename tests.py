@@ -140,16 +140,127 @@ class Embedd:
         pass
 
 
-def text_cleaner(string2):
+import pandas as pd
+def text_cleaner(string2, ret_as_string=False):
     from cleantext import clean
-    return clean(string2, no_urls=True, no_digits=True, no_line_breaks=True, no_emails=True, no_phone_numbers=True,
+    from nltk.corpus import stopwords
+    cleaned_string = clean(string2, no_urls=True, no_digits=True, no_line_breaks=True, no_emails=True, no_phone_numbers=True,
                  no_numbers=True, no_currency_symbols=True, no_punct=True, replace_with_digit="", replace_with_url="",
                  replace_with_email="", replace_with_currency_symbol="", replace_with_number="",
                  replace_with_phone_number="")
 
+    filtered_sentence = [w for w in cleaned_string.split(" ") if not w in stopwords.words('english')]
+    # optional - do not return it as a list of separate words, but as a string
+    if ret_as_string:
+        str_to_rtrn = ''
+        for elem in filtered_sentence:
+            str_to_rtrn = elem + ' '
+        return str_to_rtrn
+    else:
+        return filtered_sentence
+
+import pandas as pd
+path = '/mnt/sd1/DS/jigsaw/jigsaw-toxic-comment-train-processed-seqlen128.csv'
+table = pd.read_csv(path, nrows=1000,usecols=['comment_text', 'toxic'])
 
 
-if __name__ == '__main__':
-    pass
+# str1 = []
+# for elem in table.comment_text.to_list():
+#     str1.extend(text_cleaner(elem))
+#
+#
+# ilosc_elem = len(list(set(str1)))  # get the number of unique words
 
-from typing import Callable, Optional, Tuple, Union
+
+# dict1 = dict(zip(list(set(str1)), range(0, 9326)))
+
+
+
+
+
+def data_loader(path='/mnt/sd1/DS/tvn_zdrowie/tvn_zdrowie_train_data_classification_links_categories_3k.csv'):
+    table = pd.read_csv(path, usecols=['Meta Description 1', '2_level 1'])  # feature, label
+    # number_of_classes = table['2_level 1'].nunique()
+    # dict1 = dict(zip(table['2_level 1'].unique().tolist(), range(0, number_of_classes)))  # converts labels to numbers
+    # not needed for fast text
+    # table['labels'] = table['2_level 1'].map(dict1, na_action='ignore')
+    # table = table.drop(columns=['2_level 1'])
+    table.columns = ['feature', 'label']
+    return table
+
+
+
+from numpy import array
+from tensorflow.keras.preprocessing.text import one_hot
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.layers import Flatten
+from tensorflow.keras.layers import Embedding
+cleaned = []
+for i in range(table.shape[0]):
+    cleaned.append(" ".join(text_cleaner(table.comment_text.to_list()[i])))
+table['cleaned'] = pd.Series(cleaned)
+
+docs = table['cleaned'].to_list()
+labels = table.toxic.to_numpy()
+# integer encode the documents
+vocab_size = 9326
+encoded_docs = [one_hot(d, vocab_size) for d in docs]
+
+max_length = 578
+padded_docs = pad_sequences(encoded_docs, maxlen=max_length, padding='post')
+# print(padded_docs)
+# define the model
+from tensorflow.keras import layers
+from tensorflow.keras.layers import Embedding, Flatten
+from tensorflow.keras.models import Sequential
+from tensorflow.keras import backend as K
+
+
+def f1(y_true, y_pred):
+    def recall(y_true, y_pred):
+        """Recall metric.
+
+        Only computes a batch-wise average of recall.
+
+        Computes the recall, a metric for multi-label classification of
+        how many relevant items are selected.
+        """
+        true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+        possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
+        recall = true_positives / (possible_positives + K.epsilon())
+        return recall
+
+    def precision(y_true, y_pred):
+        """Precision metric.
+
+        Only computes a batch-wise average of precision.
+
+        Computes the precision, a metric for multi-label classification of
+        how many selected items are relevant.
+        """
+        true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+        predicted_positives = K.sum(K.round(K.clip(y_pred, 0, 1)))
+        precision = true_positives / (predicted_positives + K.epsilon())
+        return precision
+    precision = precision(y_true, y_pred)
+    recall = recall(y_true, y_pred)
+    return 2*((precision*recall)/(precision+recall+K.epsilon()))
+
+
+model = Sequential()
+model.add(Embedding(vocab_size, 64, input_length=max_length))
+model.add(layers.LSTM(64))
+model.add(Flatten())
+model.add(Dense(1, activation='sigmoid'))
+# compile the model
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=[f1])
+# summarize the model
+print(model.summary())
+# fit the model
+model.fit(padded_docs, labels, epochs=50, verbose=1, validation_split=0.2)
+# evaluate the model
+loss, accuracy = model.evaluate(padded_docs, labels, verbose=0)
+print('Accuracy: %f' % (accuracy*100))
+
